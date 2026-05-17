@@ -1,10 +1,13 @@
 require("dotenv").config();
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-const USER_ID    = process.env.LINE_DESTINATION_USER_ID;
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const IS_TEST    = process.argv.includes("--test");
+const LINE_TOKEN  = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+const USER_ID     = process.env.LINE_DESTINATION_USER_ID;
+const GEMINI_KEY  = process.env.GEMINI_API_KEY;
+const GH_TOKEN    = process.env.GITHUB_TOKEN;
+const GH_REPO     = "leouncle-health/leo-daily-digest";
+const PAGES_URL   = "https://leouncle-health.github.io/leo-daily-digest/";
+const IS_TEST     = process.argv.includes("--test");
 
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
 let fetch;
@@ -62,7 +65,7 @@ async function fetchAllPapers() {
     const result = await fetchPubMed(t.label, t.query, 2);
     console.log(`  ${t.label}: ${result.length} 篇`);
     papers.push(...result);
-    await new Promise(r => setTimeout(r, 400)); // PubMed rate limit
+    await new Promise(r => setTimeout(r, 400));
   }
   return papers;
 }
@@ -87,12 +90,117 @@ async function summarizePapers(papers) {
     } catch (e) {
       console.error(`  ⚠️ 摘要失敗 (${p.topic}): ${e.message}`);
     }
-    await new Promise(r => setTimeout(r, 13000)); // 5 RPM free tier
+    await new Promise(r => setTimeout(r, 13000));
   }
   return results;
 }
 
-// ── 3. LINE flex message ──────────────────────────────────────────────────────
+// ── 3. Build HTML page ────────────────────────────────────────────────────────
+function buildHtmlPage(summaries) {
+  const today = new Date().toLocaleDateString("zh-TW", {
+    year: "numeric", month: "long", day: "numeric", weekday: "long",
+  });
+
+  const topicEmoji = { "腸道菌相":"🦠", "睡眠":"💤", "微循環":"🩸", "減重代謝":"⚖️" };
+  const topicColor = { "腸道菌相":"#4CAF50", "睡眠":"#5C6BC0", "微循環":"#EF5350", "減重代謝":"#FF9800" };
+
+  const grouped = {};
+  summaries.forEach(s => {
+    if (!grouped[s.topic]) grouped[s.topic] = [];
+    grouped[s.topic].push(s);
+  });
+
+  const sections = Object.entries(grouped).map(([topic, items]) => {
+    const color = topicColor[topic] || "#333";
+    const emoji = topicEmoji[topic] || "📄";
+    const cards = items.map(item => `
+      <div class="card">
+        <p class="summary">${item.summary}</p>
+        ${item.url ? `<a class="source-link" href="${item.url}" target="_blank" rel="noopener">📄 查看原文：${item.title.length > 60 ? item.title.slice(0, 59) + "…" : item.title}</a>` : ""}
+      </div>`).join("");
+
+    return `
+    <section class="topic-section">
+      <h2 style="color:${color}">${emoji} ${topic}</h2>
+      ${cards}
+    </section>`;
+  }).join("");
+
+  return `<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📚 健康知識日報・${today}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; background: #f5f7fa; color: #333; }
+  header { background: #2b7a4b; color: #fff; padding: 20px 16px 16px; }
+  header h1 { font-size: 1.2rem; font-weight: 700; }
+  header p  { font-size: 0.8rem; color: #aaddbb; margin-top: 4px; }
+  main { max-width: 680px; margin: 0 auto; padding: 16px; }
+  .topic-section { margin-bottom: 24px; }
+  .topic-section h2 { font-size: 1rem; font-weight: 700; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid currentColor; }
+  .card { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .summary { font-size: 0.93rem; line-height: 1.7; color: #444; }
+  .source-link { display: block; margin-top: 10px; font-size: 0.78rem; color: #2b7a4b; text-decoration: none; word-break: break-all; }
+  .source-link:hover { text-decoration: underline; }
+  footer { text-align: center; padding: 24px 16px; font-size: 0.75rem; color: #999; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 健康知識日報</h1>
+  <p>${today}・期刊精選・由李歐叔叔 AI 助理整理</p>
+</header>
+<main>
+  ${sections || '<p style="color:#888;padding:20px 0">今日暫無新資料，明天再看！</p>'}
+</main>
+<footer>僅供健康知識參考，不構成醫療建議</footer>
+</body>
+</html>`;
+}
+
+// ── 4. Publish HTML to GitHub ─────────────────────────────────────────────────
+async function publishHtmlToGitHub(html) {
+  if (!GH_TOKEN) {
+    console.log("  ℹ️ 無 GITHUB_TOKEN，跳過 HTML 發布");
+    return;
+  }
+
+  const apiUrl = `https://api.github.com/repos/${GH_REPO}/contents/index.html`;
+  const headers = {
+    "Authorization": `Bearer ${GH_TOKEN}`,
+    "Accept": "application/vnd.github+json",
+    "Content-Type": "application/json",
+  };
+
+  // Get current file SHA (needed for update)
+  let sha;
+  try {
+    const getRes = await fetch(apiUrl, { headers });
+    if (getRes.ok) {
+      const data = await getRes.json();
+      sha = data.sha;
+    }
+  } catch (_) {}
+
+  const body = {
+    message: `chore: 更新健康知識日報 ${new Date().toLocaleDateString("zh-TW")}`,
+    content: Buffer.from(html).toString("base64"),
+    ...(sha ? { sha } : {}),
+  };
+
+  const putRes = await fetch(apiUrl, { method: "PUT", headers, body: JSON.stringify(body) });
+  if (putRes.ok) {
+    console.log(`  ✅ HTML 已發布 → ${PAGES_URL}`);
+  } else {
+    const err = await putRes.json();
+    console.error("  ❌ HTML 發布失敗:", JSON.stringify(err));
+  }
+}
+
+// ── 5. LINE flex message ──────────────────────────────────────────────────────
 function buildFlexMessage(summaries) {
   const today = new Date().toLocaleDateString("zh-TW", {
     month: "long", day: "numeric", weekday: "short",
@@ -127,9 +235,7 @@ function buildFlexMessage(summaries) {
         color: "#444444",
         margin: "sm",
       });
-      // source link
       if (item.url) {
-        // LINE button label max 40 chars; leave room for "📄 " prefix (2 chars)
         const shortTitle = item.title.length > 36 ? item.title.slice(0, 35) + "…" : item.title;
         bodyContents.push({
           type: "button",
@@ -141,23 +247,6 @@ function buildFlexMessage(summaries) {
         });
       }
     });
-  });
-
-  // LINE URI action limit is 1000 chars total; build text line-by-line to stay under budget
-  const BASE_URL = "https://line.me/R/share?text=";
-  const MAX_URI = 999;
-
-  const fits = (text) => (BASE_URL + encodeURIComponent(text)).length <= MAX_URI;
-  const clamp = (str, n) => str.length > n ? str.slice(0, n - 1) + "…" : str;
-
-  let shareText = `📚 ${today} 健康知識日報\n（李歐叔叔 AI 整理）\n`;
-  Object.entries(grouped).forEach(([topic, items]) => {
-    const emoji = topicEmoji[topic] || "📄";
-    // Take first sentence of first summary, up to 28 chars
-    const raw = items[0].summary.split("。")[0];
-    const sentence = clamp(raw, 10) + "。";
-    const line = `\n${emoji} ${topic}：${sentence}`;
-    if (fits(shareText + line)) shareText += line;
   });
 
   return {
@@ -196,8 +285,8 @@ function buildFlexMessage(summaries) {
             type: "button",
             action: {
               type: "uri",
-              label: "📤 轉傳給朋友",
-              uri: `https://line.me/R/share?text=${encodeURIComponent(shareText)}`,
+              label: "🌐 完整日報（可分享）",
+              uri: PAGES_URL,
             },
             style: "primary",
             color: "#2b7a4b",
@@ -215,7 +304,7 @@ function buildFlexMessage(summaries) {
   };
 }
 
-// ── 4. Push LINE ──────────────────────────────────────────────────────────────
+// ── 6. Push LINE ──────────────────────────────────────────────────────────────
 async function pushToLine(message) {
   const res = await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
@@ -252,11 +341,16 @@ async function main() {
   const summaries = await summarizePapers(papers);
   console.log(`  生成 ${summaries.length} 則`);
 
+  console.log("🌐 發布 HTML 日報...");
+  const html = buildHtmlPage(summaries);
+  await publishHtmlToGitHub(html);
+
   const flexMsg = buildFlexMessage(summaries);
 
   if (IS_TEST) {
     console.log("\n📋 TEST MODE - 訊息預覽：\n");
     summaries.forEach(s => console.log(`[${s.topic}] ${s.summary}\n`));
+    console.log(`分享網址：${PAGES_URL}`);
     return;
   }
 
