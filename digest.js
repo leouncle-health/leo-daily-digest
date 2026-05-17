@@ -143,22 +143,22 @@ function buildFlexMessage(summaries) {
     });
   });
 
-  // Build share text with actual summaries so forwarded message contains real content
-  const shareLines = [`📚 ${today} 健康知識日報\n（李歐叔叔 AI 助理整理・期刊精選）\n`];
-  Object.entries(grouped).forEach(([topic, items]) => {
-    shareLines.push(`${topicEmoji[topic] || "📄"} ${topic}`);
-    items.forEach(item => {
-      shareLines.push(item.summary);
-      if (item.url) shareLines.push(`🔗 ${item.url}`);
-    });
-    shareLines.push("");
-  });
-  // LINE URI action limit is 1000 chars; base URL is 33 chars, leave rest for encoded text
+  // LINE URI action limit is 1000 chars total; build text line-by-line to stay under budget
   const BASE_URL = "https://line.me/R/share?text=";
-  let shareText = shareLines.join("\n");
-  while (BASE_URL.length + encodeURIComponent(shareText).length > 999) {
-    shareText = shareText.slice(0, shareText.length - 10);
-  }
+  const MAX_URI = 999;
+
+  const fits = (text) => (BASE_URL + encodeURIComponent(text)).length <= MAX_URI;
+  const clamp = (str, n) => str.length > n ? str.slice(0, n - 1) + "…" : str;
+
+  let shareText = `📚 ${today} 健康知識日報\n（李歐叔叔 AI 整理）\n`;
+  Object.entries(grouped).forEach(([topic, items]) => {
+    const emoji = topicEmoji[topic] || "📄";
+    // Take first sentence of first summary, up to 28 chars
+    const raw = items[0].summary.split("。")[0];
+    const sentence = clamp(raw, 10) + "。";
+    const line = `\n${emoji} ${topic}：${sentence}`;
+    if (fits(shareText + line)) shareText += line;
+  });
 
   return {
     type: "flex",
