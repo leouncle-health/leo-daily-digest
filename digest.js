@@ -153,7 +153,12 @@ function buildFlexMessage(summaries) {
     });
     shareLines.push("");
   });
-  const shareText = shareLines.join("\n").slice(0, 1000); // LINE share URL text limit
+  // LINE URI action limit is 1000 chars; base URL is 33 chars, leave rest for encoded text
+  const BASE_URL = "https://line.me/R/share?text=";
+  let shareText = shareLines.join("\n");
+  while (BASE_URL.length + encodeURIComponent(shareText).length > 999) {
+    shareText = shareText.slice(0, shareText.length - 10);
+  }
 
   return {
     type: "flex",
