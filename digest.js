@@ -143,6 +143,18 @@ function buildFlexMessage(summaries) {
     });
   });
 
+  // Build share text with actual summaries so forwarded message contains real content
+  const shareLines = [`📚 ${today} 健康知識日報\n（李歐叔叔 AI 助理整理・期刊精選）\n`];
+  Object.entries(grouped).forEach(([topic, items]) => {
+    shareLines.push(`${topicEmoji[topic] || "📄"} ${topic}`);
+    items.forEach(item => {
+      shareLines.push(item.summary);
+      if (item.url) shareLines.push(`🔗 ${item.url}`);
+    });
+    shareLines.push("");
+  });
+  const shareText = shareLines.join("\n").slice(0, 1000); // LINE share URL text limit
+
   return {
     type: "flex",
     altText: `📚 ${today} 健康知識日報`,
@@ -180,7 +192,7 @@ function buildFlexMessage(summaries) {
             action: {
               type: "uri",
               label: "📤 轉傳給朋友",
-              uri: `https://line.me/R/share?text=${encodeURIComponent("📚 今日健康知識日報（李歐叔叔 AI 助理整理）\n\n腸道菌相・睡眠・微循環・減重代謝最新研究摘要，每天早上 7 點自動更新！")}`,
+              uri: `https://line.me/R/share?text=${encodeURIComponent(shareText)}`,
             },
             style: "primary",
             color: "#2b7a4b",
