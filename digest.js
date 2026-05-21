@@ -3,6 +3,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const LINE_TOKEN  = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const USER_ID     = process.env.LINE_DESTINATION_USER_ID;
+const GROUP_ID    = process.env.LINE_GROUP_ID;
 const GEMINI_KEY  = process.env.GEMINI_API_KEY;
 const GH_TOKEN    = process.env.GITHUB_TOKEN;
 const GH_REPO     = "leouncle-health/leo-daily-digest";
@@ -305,22 +306,25 @@ function buildFlexMessage(summaries) {
 }
 
 // ── 6. Push LINE ──────────────────────────────────────────────────────────────
-async function pushToLine(message) {
+async function pushToOne(to, message) {
   const res = await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${LINE_TOKEN}`,
     },
-    body: JSON.stringify({ to: USER_ID, messages: [message] }),
+    body: JSON.stringify({ to, messages: [message] }),
   });
   const data = await res.json();
-  if (res.ok) {
-    console.log("✅ LINE 推播成功");
-  } else {
-    console.error("❌ LINE 推播失敗:", JSON.stringify(data));
-  }
+  if (!res.ok) console.error(`  ❌ 推播失敗 (${to.slice(0,8)}…): ${JSON.stringify(data)}`);
   return res.ok;
+}
+
+async function pushToLine(message) {
+  const targets = [USER_ID, GROUP_ID].filter(Boolean);
+  const results = await Promise.all(targets.map(id => pushToOne(id, message)));
+  const ok = results.filter(Boolean).length;
+  console.log(`✅ LINE 推播成功 (${ok}/${targets.length} 個收件人)`);
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
